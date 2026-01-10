@@ -2,6 +2,7 @@ fastapi
 uvicorn
 numpy
 pandas
+openai
 scikit-learn
 supabase
 python-dotenv
