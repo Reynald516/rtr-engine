@@ -190,26 +190,31 @@ def analyze_user(user_id: str):
 
 @app.post("/chat")
 def chat(user_id: str, message: str):
-    context = get_engine_context(user_id)
+    try:
+        context = get_engine_context(user_id)
 
-    if not context:
-        raise HTTPException(
-            status_code=400,
-            detail="User belum dianalisis. Jalankan /analyze_user dulu."
+        if not context:
+            raise HTTPException(
+                status_code=400,
+                detail="User belum dianalisis. Jalankan /analyze_user dulu."
+            )
+
+        system_prompt = build_system_prompt(
+            mode="coach",
+            goal="financial awareness",
+            context=context
         )
 
-    system_prompt = build_system_prompt(
-        mode="coach",
-        goal="financial awareness",
-        context=context
-    )
+        reply = chat_with_user(
+            user_id=user_id,
+            user_message=message,
+            engine_context={
+                "system_prompt": system_prompt
+            }
+        )
 
-    reply = chat_with_user(
-        user_id=user_id,
-        user_message=message,
-        engine_context={
-            "system_prompt": system_prompt
-        }
-    )
-
-    return {"reply": reply}
+        return {"answer": reply}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
