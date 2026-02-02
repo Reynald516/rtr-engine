@@ -1,3 +1,5 @@
+# app/conversation/insight_router.py
+
 def route_insight(engine_output: dict) -> dict:
     insight_types = [i["type"] for i in engine_output.get("insights", [])]
 

@@ -13,6 +13,10 @@ from app.conversation.talker import chat_with_user
 from app.conversation.insight_prompt import build_system_prompt
 from app.conversation.context import save_engine_context
 from app.conversation.context import get_engine_context
+from app.clustering import cluster_user
+from app.anomaly import detect_anomaly
+from app.logic import rtr_logic
+from app.features import extract_features, extract_daily_features
 
 from app.db import (
     fetch_transactions_by_user,
@@ -44,6 +48,37 @@ def analyze_user(user_id: str):
 
     df = pd.DataFrame(transactions)
 
+    features = extract_features(df)
+    features_df = pd.DataFrame([features])
+
+    daily_features = extract_daily_features(df)
+
+    cluster_cols = [
+        "total_spend",
+        "transaction_count",
+        "night_ratio",
+        "food_ratio",
+        "entertainment_ratio"
+    ]
+    
+    # === DAILY CLUSTERING (SAFE) ===
+    if daily_features.empty or daily_features.shape[0] < 3:
+        clusters = None
+    else:
+        clusters, model = cluster_user(
+            daily_features[cluster_cols],
+            n_clusters=3
+        )
+        
+        if clusters is not None:
+            daily_features["cluster"] = clusters
+
+    # === USER CLUSTER DARI DAILY BEHAVIOR ===
+    if "cluster" in daily_features.columns:
+        user_cluster = int(daily_features["cluster"].mode()[0])
+    else:
+        user_cluster = 0
+
     required_cols = {"amount", "type", "category"}
     if not required_cols.issubset(df.columns):
         raise HTTPException(status_code=400, detail="Struktur transaksi tidak valid")
@@ -52,6 +87,10 @@ def analyze_user(user_id: str):
 
     income_df = df[df["type"] == "income"]
     expense_df = df[df["type"] == "expense"]
+
+    expense_series = expense_df["amount"]
+    anomaly_flag = detect_anomaly(expense_series)
+    is_anomaly = -1 in anomaly_flag
 
     total_income = int(income_df["amount"].sum())
     total_expense = int(expense_df["amount"].sum())
@@ -64,17 +103,16 @@ def analyze_user(user_id: str):
     total_flow = total_income + total_expense
     expense_ratio = total_expense / total_flow if total_flow > 0 else 0
 
-    if expense_ratio > 0.7:
-        risk_level = "HIGH"
-    elif expense_ratio >= 0.4:
-        risk_level = "MEDIUM"
-    else:
-        risk_level = "LOW"
+    risk_level = rtr_logic(
+        cluster=user_cluster,
+        anomaly_flag=anomaly_flag,
+        night_ratio=features["night_ratio"]
+    )
 
     analysis = {
         "user_id": user_id,
-        "cluster": 0,
-        "anomaly": False,
+        "cluster": user_cluster,
+        "anomaly": is_anomaly,
         "risk_level": risk_level,
         "summary": f"Total pengeluaran {total_expense}, kategori dominan {dominant_category}",
         "dominant_category": dominant_category,
@@ -160,17 +198,6 @@ def analyze_user(user_id: str):
             "habit_warning": habit_warning
         })
 
-        # 5. Conversational AI Response (ChatGPT Layer)
-        ai_message = talk_to_user({
-            **analysis,
-            "insights": insight["insight"]["patterns"],
-            "summary": insight["insight"]["summary"],
-            
-            "pattern_memory": pattern_memory,
-            "behavior_profile": behavior_profile,
-            "habit_warning": habit_warning
-        })
-
         save_engine_context(user_id, {
             "risk_level": risk_level,
             "dominant_category": dominant_category,
@@ -185,7 +212,6 @@ def analyze_user(user_id: str):
         "status": "success",
         "analysis": analysis,
         "insight": insight,
-        "ai_message": ai_message
     }
 
 @app.post("/chat")
@@ -193,11 +219,16 @@ def chat(user_id: str, message: str):
     try:
         context = get_engine_context(user_id)
 
+        # === AUTO ANALYZE JIKA BELUM ADA CONTEXT ===
         if not context:
-            raise HTTPException(
-                status_code=400,
-                detail="User belum dianalisis. Jalankan /analyze_user dulu."
-            )
+            analyze_user(user_id)
+            context = get_engine_context(user_id)
+
+            if not context:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Engine gagal membangun context user."
+                )
 
         system_prompt = build_system_prompt(
             mode="coach",
@@ -214,7 +245,25 @@ def chat(user_id: str, message: str):
         )
 
         return {"answer": reply}
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
+        context = get_engine_context(user_id)
+        
+        if context:
+            return {
+                "answer": (
+                    "Saya mungkin tidak bisa ngobrol panjang sekarang, "
+                    "tapi dari analisa terakhir yang ada:\n\n"
+                    f"- Risk level kamu: {context.get('risk_level')}\n"
+                    f"- Pengeluaran dominan: {context.get('dominant_category')}\n\n"
+                    "Kalau kamu mau, kita bisa bahas pelan-pelan dari situ."
+                ),
+                "mode": "fallback"
+            }
+        
+        raise HTTPException(
+            status_code=503,
+            detail="Chat service sementara tidak tersedia."
+        )

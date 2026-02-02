@@ -1,3 +1,5 @@
+# app/conversation/insight_prompt.py
+
 def build_system_prompt(
     mode: str,
     goal: str,

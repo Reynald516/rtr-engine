@@ -1,3 +1,5 @@
+# app/behavior/profile.py
+
 def build_behavior_profile(
     total_income: int,
     total_expense: int,

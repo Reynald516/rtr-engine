@@ -1,12 +1,9 @@
+# app/conversation/talker.py
 import os
-from openai import OpenAI
+from app.conversation.llm_client import chat_completion
 from app.conversation.insight_router import route_insight
 from app.conversation.insight_prompt import build_system_prompt
 from app.conversation.memory import get_memory, save_message
-
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
-)
 
 def generate_user_message(engine_output: dict) -> dict:
     # route_insight SEKARANG DIANGGAP RETURN STRING MODE
@@ -38,26 +35,21 @@ def generate_user_message(engine_output: dict) -> dict:
 def talk_to_user(engine_output: dict) -> str:
     payload = generate_user_message(engine_output)
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
+    return chat_completion(
         messages=[
             {"role": "system", "content": payload["system_prompt"]},
             {
                 "role": "user",
                 "content": f"""
-Ringkasan kondisi user:
-{payload['user_payload']['summary']}
-
-Insight mesin:
-{payload['user_payload']['engine_insights']}
-"""
+    Ringkasan kondisi user:
+    {payload['user_payload']['summary']}
+    
+    Insight mesin:
+    {payload['user_payload']['engine_insights']}
+    """
             }
-        ],
-        temperature=0.6,
-        max_tokens=250
+        ]
     )
-
-    return response.choices[0].message.content
 
 def chat_with_user(user_id: str, user_message: str, engine_context: dict) -> str:
     memory = get_memory(user_id)
@@ -73,14 +65,9 @@ def chat_with_user(user_id: str, user_message: str, engine_context: dict) -> str
         "content": user_message
     })
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.6,
-        max_tokens=250
+    assistant_reply = chat_completion(
+        messages=messages
     )
-
-    assistant_reply = response.choices[0].message.content
 
     # SIMPAN MEMORY
     save_message(user_id, "user", user_message)

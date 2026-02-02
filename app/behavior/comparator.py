@@ -1,3 +1,5 @@
+# app/behavior/comparator.py
+
 def compare_behavior(today: dict, yesterday: dict):
     expense_change = today["total_expense"] - yesterday["total_expense"]
     income_change = today["total_income"] - yesterday["total_income"]

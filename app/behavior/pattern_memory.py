@@ -1,3 +1,5 @@
+# app/behavior/pattern_memory.py
+
 def analyze_pattern_memory(recent_analyses: list):
     """
     Analisis pola sederhana dari beberapa hari terakhir
