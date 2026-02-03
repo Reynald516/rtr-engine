@@ -214,8 +214,18 @@ def analyze_user(user_id: str):
         "insight": insight,
     }
 
+from pydantic import BaseModel
+from typing import List, Optional
+
+class ChatRequest(BaseModel):
+    user_id: str
+    message: str
+    transactions: Optional[List[dict]] = None
+
 @app.post("/chat")
-def chat(user_id: str, message: str):
+def chat(payload: ChatRequest):
+    user_id = payload.user_id
+    message = payload.message
     try:
         context = get_engine_context(user_id)
 
