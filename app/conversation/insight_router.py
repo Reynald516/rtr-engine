@@ -1,7 +1,10 @@
 # app/conversation/insight_router.py
 
 def route_insight(engine_output: dict) -> dict:
-    insight_types = [i["type"] for i in engine_output.get("insights", [])]
+    insight_block = engine_output.get("insight", {})
+    patterns = insight_block.get("patterns", [])
+
+    insight_types = {pattern["type"] for pattern in patterns}
 
     if "HABIT_WARNING" in insight_types:
         return {

@@ -8,21 +8,29 @@ from .schema import build_insight_response
 def generate_insight(analysis_result: dict):
     today = date.today().isoformat()
 
-    risk_level = analysis_result["risk_level"]
-    dominant_category = analysis_result.get("dominant_category")
+    risk_level = analysis_result.get("risk_level", "UNKNOWN")
+    top_categories = sorted(
+        analysis_result.get("category_breakdown", {}).items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
     total_expense = analysis_result.get("total_expense", 0)
-    total_income = analysis_result.get("total_income", 0)
-    anomaly = analysis_result.get("anomaly", False)
 
     # TITLE
-    title = RISK_TITLES[risk_level]
+    title = RISK_TITLES.get(risk_level, "Status keuangan kamu hari ini tidak dapat dianalisis")
 
     # SUMMARY
-    summary = (
-        f"Hari ini pengeluaran terbesar kamu ada di kategori "
-        f"{dominant_category} dengan total pengeluaran {total_expense}. "
-        f"Secara keseluruhan kondisi keuangan kamu {risk_level.lower()}."
-    )
+    if top_categories and total_expense > 0:
+        summary = (
+            f"Hari ini pengeluaran terbesar kamu ada di kategori "
+            f"{top_categories[0][0]} dengan total pengeluaran {total_expense}. "
+            f"Secara keseluruhan kondisi keuangan kamu {risk_level.lower()}."
+        )
+    else:
+        summary = (
+            f"Hari ini belum ada pengeluaran signifikan yang terdeteksi. "
+            f"Secara keseluruhan kondisi keuangan kamu {risk_level.lower()}."
+        )
 
     # PATTERNS
     patterns = []
@@ -33,7 +41,7 @@ def generate_insight(analysis_result: dict):
     if habit_warning:
         patterns.append({
             "type": "HABIT_WARNING",
-            "level": habit_warning.get("level"),
+            "level": habit_warning.get("level", "INFO"),
             "description": habit_warning.get("message")
         })
 
@@ -73,37 +81,47 @@ def generate_insight(analysis_result: dict):
                 "description": note
             })
 
-    if dominant_category:
+    if top_categories and total_expense > 0:
         patterns.append({
             "type": "SPENDING_DOMINANCE",
-            "description": f"Sebagian besar pengeluaran kamu terkonsentrasi pada kategori {dominant_category}."
+            "description": f"Sebagian besar pengeluaran kamu terkonsentrasi pada kategori {top_categories[0][0]}."
         })
 
-    if total_expense > total_income:
+    if analysis_result.get("income_unstable"):
         patterns.append({
             "type": "INCOME_INSTABILITY",
             "description": "Total pengeluaran kamu lebih besar dibanding pemasukan hari ini."
         })
 
-    if anomaly:
+    if analysis_result.get("anomaly"):
         patterns.append({
             "type": "ANOMALY",
             "description": "Terdapat transaksi yang tidak biasa dibanding pola normal kamu."
         })
 
     # WARNING
+    warning_message_map = {
+        "LOW": "Kondisi keuangan kamu stabil hari ini.",
+        "MEDIUM": "Ada beberapa pola yang perlu kamu perhatikan.",
+        "HIGH": "Pengeluaran kamu perlu segera dikontrol.",
+        "DANGER": "Segera evaluasi kondisi keuangan kamu hari ini."
+    }
+    
     warnings = [{
-        "level": WARNING_LEVEL[risk_level],
-        "message": "Pola keuangan kamu masih dalam batas yang dapat dianalisis."
+        "level": WARNING_LEVEL.get(risk_level, "INFO"),
+        "message": warning_message_map.get(
+            risk_level,
+            "Status keuangan tidak dapat ditentukan."
+        )
     }]
 
     # ADVICE
     advice = []
 
-    if dominant_category:
-        advice.append(f"Pertimbangkan untuk mengatur ulang biaya {dominant_category.lower()}.")
+    if top_categories:
+        advice.append(f"Pertimbangkan untuk mengatur ulang biaya {top_categories[0][0].lower()}.")
 
-    if total_expense > total_income:
+    if analysis_result.get("income_unstable"):
         advice.append("Coba evaluasi pengeluaran agar tidak melebihi pemasukan.")
 
     return build_insight_response(

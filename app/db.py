@@ -24,24 +24,25 @@ def fetch_transactions_by_user(user_id: str):
         response = (
             supabase
             .table("transactions")
-            .select("amount, type, category")
+            .select("amount, type, category, created_at")
             .eq("user_id", user_id)
             .execute()
         )
 
-        print("DEBUG fetch_transactions response:", response.data)
-
         if response.data is None:
             raise RuntimeError("Supabase fetch returned no data")
 
-        return response.data
+        data = response.data
+
+        for item in data:
+            item["timestamp"] = item.get("created_at")
+
+        return data
 
     except Exception as e:
         raise RuntimeError(f"Fetch transactions failed: {str(e)}")
 
-
-def save_user_analysis(data: dict):
-    today = date.today().isoformat()
+def save_user_analysis(data: dict, analysis_date: str):
     """
     Insert hasil analisis user ke table user_analysis.
     Return: list of dict hasil insert
@@ -53,7 +54,7 @@ def save_user_analysis(data: dict):
             .upsert(
                 {
                     "user_id": data["user_id"],
-                    "analysis_date": today,
+                    "analysis_date": analysis_date,
                     "cluster": data["cluster"],
                     "anomaly": data["anomaly"],
                     "risk_level": data["risk_level"],
@@ -66,8 +67,6 @@ def save_user_analysis(data: dict):
             )
             .execute()
         )
-
-        print("DEBUG save_user_analysis response:", response.data)
 
         if response.data is None:
             raise RuntimeError("Supabase insert returned no data")
@@ -104,10 +103,13 @@ def save_behavior_analysis(data: dict):
 
     return response.data
 
-def fetch_last_analysis_before_today(user_id: str, today: str):
+def fetch_last_analysis_before_today(user_id):
+    
     """
     Ambil analisis terakhir user sebelum tanggal hari ini
     """
+    today = date.today().isoformat()
+
     try:
         # PSEUDO SQL / QUERY STYLE
         # Ambil 1 data terakhir < today
@@ -124,7 +126,7 @@ def fetch_last_analysis_before_today(user_id: str, today: str):
         return None
 
     except Exception as e:
-        raise Exception(f"Fetch last analysis failed: {str(e)}")
+        raise RuntimeError(f"Fetch last analysis failed: {str(e)}")
     
 def fetch_recent_analyses(user_id: str, days: int = 3):
     """
@@ -144,4 +146,4 @@ def fetch_recent_analyses(user_id: str, days: int = 3):
         return result.data or []
 
     except Exception as e:
-        raise Exception(f"Fetch recent analyses failed: {str(e)}")
+        raise RuntimeError(f"Fetch recent analyses failed: {str(e)}")
