@@ -155,39 +155,46 @@ def chat_with_user(user_id: str, user_message: str, context: dict) -> str:
     # 7. BANGUN ACTIONABLE RECOMMENDATION
     actionable_rec = generate_actionable_recommendation(risk_level, analysis, insight)
     
-    # 8. BANGUN CONTEXT MESSAGE DENGAN TONE DAN RECOMMENDATION
+    # 8. BANGUN CONTEXT MESSAGE DENGAN TONE DAN RECOMMENDATION   
+    def fmt(n) -> str:
+        try:
+            return f"Rp {int(n):,}".replace(",", ".")
+        except:
+            return "Rp 0"
+
+    dominant_cat = context.get("dominant_category") or "Belum terdeteksi"
+    summary_text = context.get("summary_text") or context.get("summary") or ""
+    spending_pattern = context.get("spending_pattern") or {}
+    pattern_notes = ""
+    if isinstance(spending_pattern, dict):
+        notes = spending_pattern.get("notes", [])
+        if notes:
+            pattern_notes = "\n".join([f"  - {n}" for n in notes])
+
     context_message = f"""
-DATA KEUANGAN USER (REAL DATA):
+DATA KEUANGAN USER (REAL DATA — WAJIB DIPAKAI):
+
+- Total Pemasukan  : {fmt(total_income)}
+- Total Pengeluaran: {fmt(total_expense)}
+- Net Cashflow     : {fmt(net_cashflow)}
+- Risk Level       : {risk_level}
+- Kategori Dominan : {dominant_cat}
+- Largest Expense  : {fmt(context.get("largest_expense", 0) or 0)}
+- Ringkasan        : {summary_text}
+
+POLA PENGELUARAN:
+{pattern_notes if pattern_notes else "Belum ada pola terdeteksi"}
 
 TONE: {tone}
 
-- Patterns: 
-{engine_context.get("patterns")}
+{generate_actionable_recommendation(risk_level, {"total_income": total_income, "total_expense": total_expense, "net_cashflow": net_cashflow, "dominant_category": dominant_cat, "largest_category": dominant_cat, "category_breakdown": {}}, {})}
 
-- Largest Category: {engine_context.get("largest_category")}
-- Smallest Category: {engine_context.get("smallest_category")}
-
-- Total Income: {engine_context.get("total_income")}
-- Total Expense: {engine_context.get("total_expense")}
-- Net Cashflow: {engine_context.get("net_cashflow")}
-- Risk Level: {engine_context.get("risk_level")}
-- Dominant Category: {engine_context.get("dominant_category")}
-
-CATEGORY BREAKDOWN (WAJIB DIPAKAI UNTUK JAWABAN):
-{category_text}
-
-BEHAVIOR INSIGHT:
-{format_behavior(behavior)}
-
-{actionable_rec}
-
-RULE:
-- Gunakan tone yang sesuai: {tone}
-- Jangan pernah keluar dari konteks data
-- Semua jawaban harus mengacu ke category_breakdown atau metrics
-- Jika user minta saran → wajib berbasis angka / kategori nyata dan sertakan action items
-- Jawaban HARUS berdasarkan data di atas
-- Sajikan rekomendasi dalam format numbered list
+RULES WAJIB:
+- Semua jawaban HARUS mengacu data di atas
+- Jangan pernah sebut "N/A" — gunakan "Belum terdeteksi" jika data kosong
+- Gunakan bahasa Indonesia yang santai dan akrab
+- Sajikan angka dalam format Rp X.XXX.XXX
+- Berikan jawaban yang natural, bukan template
 """
 
     messages = [
@@ -333,112 +340,17 @@ def get_pattern_recommendation(pattern: str) -> str:
 
 def detect_intent(user_message: str) -> str:
     """
-    Detect user intent from their message.
-    
-    FIX: Uses regex word boundaries to prevent false positives.
-    Example: "keluar" should NOT match "pengeluaran"
+    Minimal intent detection.
+    Semua pertanyaan diteruskan ke Groq LLM untuk jawaban yang lebih baik.
     """
-    import re
-    
-    message_lower = user_message.lower()
-    
-    # =====================================================
-    # FIX: Use regex word boundaries (\b) to prevent false matches
-    # Structure: {intent_keyword: (keywords_list, intent_name)}
-    # =====================================================
-    
-    # 🔥 CORE FINANCIAL INTENTS - with word boundaries
-    # Check for "pengeluaran" FIRST (longer match) before "keluar"
-    if re.search(r"\b(pemasukan|income|gaji|penghasilan)\b", message_lower):
-        return "income"
-    
-    # Expense: check longer phrases first to avoid substring issues
-    if re.search(r"\b(pengeluaran|expense|belanja)\b", message_lower):
-        return "expense"
-    
-    # Cashflow: also check for "keluar" as standalone word (not inside "pengeluaran")
-    if re.search(r"\b(saldo|cashflow|sisa uang|sisa)\b", message_lower):
-        return "cashflow"
-
-    # EXISTING INTENTS - with word boundaries
-    if re.search(r"\b(kenapa|mengapa|why|penyebab|sebab)\b", message_lower):
-        return "reason"
-    
-    if re.search(r"\b(hemat|irit|save|kurangi|optimize|boros)\b", message_lower):
-        return "saving"
-    
-    if re.search(r"\b(saran|rekomendasi|tips|advice|bagaimana|harus|mesti)\b", message_lower):
-        return "recommendation"
-    
-    if re.search(r"\b(analisa|analysis|cek|lihat|tampil)\b", message_lower):
-        return "analysis"
-    
-    if re.search(r"\b(banding|compare|beda|versus|lebih)\b", message_lower):
-        return "comparison"
-    
-    if re.search(r"\b(target|goal|plan|rencana|tabung|invest)\b", message_lower):
-        return "planning"
-    
-    if re.search(r"\b(status|kondisi|keuangan|sehat)\b", message_lower):
-        return "status"
-    
-    if re.search(r"\b(benar|oke|ok|sip|good|nice)\b", message_lower):
-        return "acknowledgment"
-    
     return "general"
 
 
 def build_intent_based_response(intent: str, user_message: str, analysis: dict, insight: dict, behavior: dict, tone: str) -> str:
-    """Build response based on detected intent."""
-    
-    risk_level = analysis.get("risk_level", "NORMAL")
-    largest_category = analysis.get("largest_category", "N/A")
-    smallest_category = analysis.get("smallest_category", "N/A")
-    total_expense = analysis.get("total_expense", 0)
-    total_income = analysis.get("total_income", 0)
-    net_cashflow = total_income - total_expense
-    
-    # 🔥 CORE FINANCIAL INTENTS - Data-driven, no LLM
-    if intent == "income":
-        return f"Pemasukan kamu bulan ini sekitar Rp{total_income:,}. Kalau konsisten, ini udah bagus."
-
-    elif intent == "expense":
-        return f"Total pengeluaran kamu bulan ini Rp{total_expense:,}."
-
-    elif intent == "cashflow":
-        if net_cashflow < 0:
-            return f"Kamu minus Rp{abs(net_cashflow):,} bulan ini. Perlu kontrol pengeluaran."
-        return f"Sisa uang kamu Rp{net_cashflow:,}. Masih aman."
-    
-    # EXISTING INTENTS
-    if intent == "reason":
-        return f"Kondisi keuangan kamu: Risk {risk_level}. Terbesar di {largest_category} (Rp{total_expense:,}). Net: Rp{net_cashflow:,}. Trend: {behavior.get('trend', 'stabil')}."
-    
-    elif intent == "saving":
-        actionable = generate_actionable_recommendation(risk_level, analysis, insight)
-        return f"Untuk hemat, fokus kurangi {largest_category}. {actionable}"
-    
-    elif intent == "recommendation":
-        actionable = generate_actionable_recommendation(risk_level, analysis, insight)
-        return f"Saran untukmu:\n{actionable}"
-    
-    elif intent == "analysis":
-        breakdown = analysis.get("category_breakdown", {})
-        txt = ", ".join([f"{k}: Rp{v:,}" for k, v in breakdown.items()])
-        return f"Analisis: {txt}"
-    
-    elif intent == "comparison":
-        return f"Perbandingan: Income Rp{total_income:,} vs Expense Rp{total_expense:,}."
-    
-    elif intent == "planning":
-        return "Planning: 1) Dana darurat 3x pengeluaran, 2) Investasi, 3) Pelunasan utang."
-    
-    elif intent == "status":
-        return f"Status: {risk_level}. Net cashflow Rp{net_cashflow:,}. Perilaku: {behavior.get('spending_pattern', 'normal')}."
-    
-    elif intent == "acknowledgment":
-        return "Terima kasih! Ada yang lain?"
-    
+    """
+    Semua pertanyaan diteruskan ke Groq LLM.
+    Fast path untuk angka sudah ditangani di engine_pipeline.py.
+    """
     return None
 
 
