@@ -129,6 +129,40 @@ def chat_with_user(user_id: str, user_message: str, context: dict) -> str:
     }
     
     # Lanjutkan dengan logic LLM yang sudah ada
+        # Fetch transaksi terbaru untuk jawaban detail
+    from app.db import supabase as _supabase
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    recent_transactions = []
+    try:
+        tx_resp = (
+            _supabase
+            .table("transactions")
+            .select("amount, type, category, date, created_at, notes, description")
+            .eq("user_id", user_id)
+            .order("created_at", ascending=False)
+            .limit(30)
+            .execute()
+        )
+        recent_transactions = tx_resp.data or []
+    except Exception as e:
+        print(f"[WARNING] Failed to fetch transactions: {e}")
+
+    # Format transaksi untuk context
+    tx_lines = []
+    for tx in recent_transactions:
+        date = (tx.get("date") or tx.get("created_at", "")[:10])
+        created = tx.get("created_at", "")
+        time_str = created[11:16] if len(created) >= 16 else ""
+        cat = tx.get("category", "")
+        amount = int(tx.get("amount", 0) or 0)
+        tx_type = "PEMASUKAN" if tx.get("type") == "income" else "PENGELUARAN"
+        notes = tx.get("notes") or tx.get("description") or ""
+        label = f"  [{date} {time_str}] {tx_type} | {cat} | Rp {amount:,} | {notes}".replace(",", ".")
+        tx_lines.append(label)
+
+    tx_text = "\n".join(tx_lines) if tx_lines else "Belum ada transaksi"
+
+    # Lanjutkan dengan logic LLM yang sudah ada
     memory = get_memory(user_id)
 
     # 9. DETEKSI INTENT USER
@@ -171,9 +205,12 @@ def chat_with_user(user_id: str, user_message: str, context: dict) -> str:
         if notes:
             pattern_notes = "\n".join([f"  - {n}" for n in notes])
 
-    context_message = f"""
-DATA KEUANGAN USER (REAL DATA — WAJIB DIPAKAI):
+        context_message = f"""
+Kamu adalah RTR Engine, asisten keuangan AI yang SUDAH TERINTEGRASI dalam aplikasi ini.
+JANGAN PERNAH menyarankan pengguna untuk menggunakan aplikasi keuangan lain karena kamu sudah ada di sini.
+Tanggal hari ini: {today_str}
 
+DATA KEUANGAN USER (REAL DATA — WAJIB DIPAKAI):
 - Total Pemasukan  : {fmt(total_income)}
 - Total Pengeluaran: {fmt(total_expense)}
 - Net Cashflow     : {fmt(net_cashflow)}
@@ -185,16 +222,20 @@ DATA KEUANGAN USER (REAL DATA — WAJIB DIPAKAI):
 POLA PENGELUARAN:
 {pattern_notes if pattern_notes else "Belum ada pola terdeteksi"}
 
+RIWAYAT TRANSAKSI TERBARU (30 TERAKHIR — GUNAKAN UNTUK JAWAB PERTANYAAN DETAIL):
+{tx_text}
+
 TONE: {tone}
 
-{generate_actionable_recommendation(risk_level, {"total_income": total_income, "total_expense": total_expense, "net_cashflow": net_cashflow, "dominant_category": dominant_cat, "largest_category": dominant_cat, "category_breakdown": {}}, {})}
+{generate_actionable_recommendation(risk_level, {{"total_income": total_income, "total_expense": total_expense, "net_cashflow": net_cashflow, "dominant_category": dominant_cat, "largest_category": dominant_cat, "category_breakdown": {{}}}}, {{}})}
 
 RULES WAJIB:
-- Semua jawaban HARUS mengacu data di atas
+- Kamu ADALAH aplikasi keuangan ini — jangan rekomendasikan app lain
+- Gunakan data TRANSAKSI TERBARU di atas untuk jawab pertanyaan spesifik (hari ini, kemarin, dll)
 - Jangan pernah sebut "N/A" — gunakan "Belum terdeteksi" jika data kosong
 - Gunakan bahasa Indonesia yang santai dan akrab
 - Sajikan angka dalam format Rp X.XXX.XXX
-- Berikan jawaban yang natural, bukan template
+- Berikan jawaban natural, bukan template
 """
 
     messages = [
