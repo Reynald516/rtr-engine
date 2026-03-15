@@ -18,7 +18,7 @@ from app.db import supabase
 def get_monthly_financial_summary(user_id: str) -> dict:
     """
     Fetch precomputed financial summary from user_financial_summary table.
-    
+
     Input: user_id
     Query: user_financial_summary for current month
     Output: Financial summary dict
@@ -28,9 +28,9 @@ def get_monthly_financial_summary(user_id: str) -> dict:
     # ⚠️ HARD GUARD: PHASE 4 VIOLATION
     # =====================================================
     raise RuntimeError("PHASE 4 VIOLATION: Do not use user_financial_summary in request pipeline")
-    
+
     current_month = datetime.now().strftime("%Y-%m")
-    
+
     try:
         response = (
             supabase
@@ -40,13 +40,12 @@ def get_monthly_financial_summary(user_id: str) -> dict:
             .eq("month", current_month)
             .execute()
         )
-        
+
         if response.data and len(response.data) > 0:
             return response.data[0]
-        
-        # No silent fallback - raise error to detect missing data
+
         raise RuntimeError(f"Financial summary not found for user {user_id}")
-    
+
     except RuntimeError:
         raise
     except Exception as e:
@@ -60,72 +59,77 @@ def run_pipeline(user_id: str, message: str) -> dict:
     Rules:
     - NEVER compute insight here
     - ONLY read from user_insights
-    - Add basic router (fast vs llm)
+    - Fast path hanya untuk query angka eksplisit
+    - Semua pertanyaan lain masuk LLM (Groq)
     """
 
     # Step 1: Get precomputed insight
     insight = get_latest_insight(user_id)
 
-    # Step 2: Handle missing insight
+    # Step 2: Handle missing insight — fallback on-demand
+    if not insight:
+        try:
+            from app.jobs.daily_job import run_daily_job_for_user
+            print(f"[INFO] No precomputed insight for {user_id}, running on-demand...")
+            run_daily_job_for_user(user_id)
+            insight = get_latest_insight(user_id)
+        except Exception as e:
+            print(f"[WARNING] On-demand analysis failed: {e}")
+
     if not insight:
         return {
             "mode": "pending",
             "data": None,
-            "response": "Data sedang diproses, coba lagi nanti"
+            "response": "Belum ada data keuangan. Yuk mulai catat transaksi dulu!"
         }
 
     context = insight
 
     # ========================================
-    # 🚀 BASIC ROUTER (PHASE 5 PREP)
+    # 🚀 SMART FAST PATH
+    # Hanya untuk query angka total yang eksplisit
     # ========================================
 
     msg = message.lower().strip()
 
-    # ========================================
-    # 🚀 SMART FAST PATH (PHASE 5 v1)
-    # ========================================
+    FAST_PATH_TRIGGERS = [
+        "total pengeluaran",
+        "total pemasukan",
+        "total income",
+        "total expense",
+        "berapa saldo",
+        "saldo sekarang",
+        "net cashflow",
+        "cashflow bulan",
+    ]
 
-    # Financial quick queries
-    if any(keyword in msg for keyword in [
-        "saldo",
-        "pengeluaran",
-        "penghasilan",
-        "income",
-        "expense",
-        "balance"
-    ]):
-        # FIX: Use net_cashflow (matching insight_repository field name)
-        balance = context.get("net_cashflow", 0)
-        income = context.get("total_income", 0)
-        expense = context.get("total_expense", 0)
-        
-        # Context-aware response based on keyword
-        if "saldo" in msg or "balance" in msg:
-            response = f"Saldo bulan ini: {balance}"
+    if any(trigger in msg for trigger in FAST_PATH_TRIGGERS):
+        balance = int(context.get("net_cashflow", 0) or 0)
+        income = int(context.get("total_income", 0) or 0)
+        expense = int(context.get("total_expense", 0) or 0)
+
+        def fmt(n: int) -> str:
+            return f"Rp {n:,}".replace(",", ".")
+
+        if "saldo" in msg or "balance" in msg or "cashflow" in msg:
+            resp = f"Saldo bersih bulan ini: {fmt(balance)}"
         elif "pengeluaran" in msg or "expense" in msg:
-            response = f"Total pengeluaran bulan ini: {expense}"
-        elif "penghasilan" in msg or "income" in msg:
-            response = f"Total pemasukan bulan ini: {income}"
+            resp = f"Total pengeluaran bulan ini: {fmt(expense)}"
+        elif "pemasukan" in msg or "income" in msg:
+            resp = f"Total pemasukan bulan ini: {fmt(income)}"
         else:
-            response = f"Saldo: {balance}. Income: {income}. Expense: {expense}"
-        
-        return {
-            "mode": "fast",
-            "data": context,
-            "response": response
-        }
+            resp = f"Saldo: {fmt(balance)} | Pemasukan: {fmt(income)} | Pengeluaran: {fmt(expense)}"
 
-    # Short generic messages
-    if len(msg) < 20:
         return {
             "mode": "fast",
             "data": context,
-            "response": "Oke, diproses cepat oleh sistem"
+            "response": resp
         }
 
     # ========================================
-    # 🧠 LLM PATH
+    # 🧠 LLM PATH (Groq)
+    # Semua pertanyaan selain angka eksplisit
+    # termasuk: halo, tips, kategori, saran, dll
     # ========================================
     response = chat_with_user(
         user_id=user_id,
